@@ -1,0 +1,301 @@
+---
+title: "EDA"
+author: "Team 4"
+format: html
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(corrplot)
+library(ggplot2)
+library(gridExtra)
+library(scales)
+library(knitr)
+
+# Read the data
+train_data <- read.csv("cell2celltrain.csv")
+holdout_data <- read.csv("cell2cellholdout.csv")
+
+# =============================================================================
+# 1. DATA OVERVIEW & BASIC STATISTICS
+# =============================================================================
+
+cat("=== DATA OVERVIEW ===\n")
+cat("Training data dimensions:", dim(train_data), "\n")
+cat("Holdout data dimensions:", dim(holdout_data), "\n\n")
+
+# Basic structure
+cat("Training data structure:\n")
+str(train_data)
+cat("\n")
+
+# Check for missing values
+cat("Missing values in training data:\n")
+missing_summary <- sapply(train_data, function(x) sum(is.na(x)))
+print(missing_summary[missing_summary > 0])
+
+# Basic statistics for key numerical variables
+key_vars <- c("MonthlyRevenue", "MonthlyMinutes", "CustomerCareCalls", 
+              "DroppedCalls", "BlockedCalls", "MonthsInService", 
+              "OverageMinutes", "PercChangeMinutes", "PercChangeRevenues")
+
+cat("\nBasic statistics for key variables:\n")
+print(summary(train_data[key_vars]))
+
+# =============================================================================
+# 2. TARGET VARIABLE ANALYSIS
+# =============================================================================
+
+# Churn distribution
+churn_summary <- train_data %>%
+  group_by(Churn) %>%
+  summarise(
+    Count = n(),
+    Percentage = n() / nrow(train_data) * 100
+  )
+
+cat("\n=== CHURN DISTRIBUTION ===\n")
+print(churn_summary)
+
+# Plot churn distribution
+p1 <- ggplot(train_data, aes(x = Churn, fill = Churn)) +
+  geom_bar() +
+  geom_text(stat = 'count', aes(label = ..count..), vjust = -0.5) +
+  labs(title = "Churn Distribution", x = "Churn", y = "Count") +
+  theme_minimal()
+
+print(p1)
+
+# =============================================================================
+# 3. SERVICE QUALITY FACTORS ANALYSIS
+# =============================================================================
+
+# Create composite network reliability metric
+train_data <- train_data %>%
+  mutate(
+    NetworkReliability = DroppedCalls + BlockedCalls,
+    CallQualityIssues = ifelse(DroppedBlockedCalls > median(DroppedBlockedCalls, na.rm = TRUE), "High", "Low"),
+    HighCareCalls = ifelse(CustomerCareCalls > median(CustomerCareCalls, na.rm = TRUE), "High", "Low")
+  )
+
+# Service quality vs churn
+service_plots <- list()
+
+# Dropped/Blocked Calls vs Churn
+service_plots[[1]] <- ggplot(train_data, aes(x = Churn, y = DroppedBlockedCalls, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Dropped/Blocked Calls vs Churn", y = "Dropped/Blocked Calls") +
+  theme_minimal()
+
+# Customer Care Calls vs Churn
+service_plots[[2]] <- ggplot(train_data, aes(x = Churn, y = CustomerCareCalls, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Customer Care Calls vs Churn", y = "Customer Care Calls") +
+  theme_minimal()
+
+# Network Reliability vs Churn
+service_plots[[3]] <- ggplot(train_data, aes(x = Churn, y = NetworkReliability, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Network Reliability Issues vs Churn", y = "Network Reliability Issues") +
+  theme_minimal()
+
+# Overage Minutes vs Churn
+service_plots[[4]] <- ggplot(train_data, aes(x = Churn, y = OverageMinutes, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Overage Minutes vs Churn", y = "Overage Minutes") +
+  theme_minimal()
+
+# Display service quality plots
+grid.arrange(grobs = service_plots, ncol = 2)
+
+# =============================================================================
+# 4. REVENUE & USAGE ANALYSIS
+# =============================================================================
+
+revenue_plots <- list()
+
+# Monthly Revenue vs Churn
+revenue_plots[[1]] <- ggplot(train_data, aes(x = Churn, y = MonthlyRevenue, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Monthly Revenue vs Churn", y = "Monthly Revenue ($)") +
+  theme_minimal()
+
+# Monthly Minutes vs Churn
+revenue_plots[[2]] <- ggplot(train_data, aes(x = Churn, y = MonthlyMinutes, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Monthly Minutes vs Churn", y = "Monthly Minutes") +
+  theme_minimal()
+
+# Percentage Change in Revenue vs Churn
+revenue_plots[[3]] <- ggplot(train_data, aes(x = Churn, y = PercChangeRevenues, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Percentage Change in Revenue vs Churn", y = "% Change Revenue") +
+  theme_minimal()
+
+# Percentage Change in Minutes vs Churn
+revenue_plots[[4]] <- ggplot(train_data, aes(x = Churn, y = PercChangeMinutes, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Percentage Change in Minutes vs Churn", y = "% Change Minutes") +
+  theme_minimal()
+
+# Display revenue plots
+grid.arrange(grobs = revenue_plots, ncol = 2)
+
+# =============================================================================
+# 5. CUSTOMER SEGMENTATION ANALYSIS
+# =============================================================================
+
+# Create customer segments - FIXED CODE
+# Calculate quantiles for revenue segmentation
+revenue_quantiles <- quantile(train_data$MonthlyRevenue, probs = c(0, 0.33, 0.66, 1), na.rm = TRUE)
+tenure_breaks <- c(0, 12, 36, max(train_data$MonthsInService, na.rm = TRUE))
+
+train_data <- train_data %>%
+  mutate(
+    RevenueSegment = cut(MonthlyRevenue, breaks = revenue_quantiles, 
+                         labels = c("Low", "Medium", "High"), include.lowest = TRUE),
+    TenureSegment = cut(MonthsInService, breaks = tenure_breaks,
+                        labels = c("New", "Medium", "Long"), include.lowest = TRUE),
+    HighValue = ifelse(MonthlyRevenue > median(MonthlyRevenue, na.rm = TRUE), "High", "Low")
+  )
+
+# Churn rate by segments
+segment_analysis <- train_data %>%
+  group_by(RevenueSegment) %>%
+  summarise(
+    Total_Customers = n(),
+    Churn_Rate = sum(Churn == "Yes") / n() * 100
+  )
+
+cat("\n=== CHURN RATE BY REVENUE SEGMENT ===\n")
+print(segment_analysis)
+
+# Service issues by customer segments
+segment_service <- train_data %>%
+  group_by(HighValue) %>%
+  summarise(
+    Avg_DroppedCalls = mean(DroppedCalls, na.rm = TRUE),
+    Avg_CareCalls = mean(CustomerCareCalls, na.rm = TRUE),
+    Churn_Rate = sum(Churn == "Yes") / n() * 100
+  )
+
+cat("\n=== SERVICE ISSUES BY CUSTOMER VALUE ===\n")
+print(segment_service)
+
+# =============================================================================
+# 6. CORRELATION ANALYSIS
+# =============================================================================
+
+# Select numerical variables for correlation
+numerical_vars <- train_data %>%
+  select(where(is.numeric)) %>%
+  select(-CustomerID)  # Remove ID column
+
+# Calculate correlation matrix (using only complete cases for simplicity)
+cor_matrix <- cor(numerical_vars, use = "complete.obs")
+
+# Focus on correlations with churn (convert Churn to numeric for correlation)
+train_data_numeric <- train_data %>%
+  mutate(Churn_Numeric = ifelse(Churn == "Yes", 1, 0))
+
+# Get numerical variables including the new Churn_Numeric
+numerical_vars_with_churn <- train_data_numeric %>%
+  select(where(is.numeric)) %>%
+  select(-CustomerID)
+
+churn_correlations <- cor(numerical_vars_with_churn, use = "complete.obs") %>%
+  as.data.frame() %>%
+  select(Churn_Numeric) %>%
+  arrange(desc(abs(Churn_Numeric)))
+
+cat("\n=== TOP CORRELATIONS WITH CHURN ===\n")
+print(head(churn_correlations, 15))
+
+# Correlation plot (top 15 variables with churn)
+top_vars <- rownames(churn_correlations)[2:16]  # Skip Churn_Numeric itself
+cor_top <- cor(numerical_vars_with_churn[top_vars], use = "complete.obs")
+corrplot(cor_top, method = "color", type = "upper", order = "hclust",
+         title = "Correlation Matrix - Top Variables with Churn")
+
+# =============================================================================
+# 7. INTERACTION EFFECTS ANALYSIS (For Pathway 2)
+# =============================================================================
+
+# Analyze how service issues affect different customer segments
+interaction_analysis <- train_data %>%
+  group_by(HighValue, CallQualityIssues) %>%
+  summarise(
+    Count = n(),
+    Churn_Rate = sum(Churn == "Yes") / n() * 100,
+    .groups = 'drop'
+  )
+
+cat("\n=== INTERACTION: CUSTOMER VALUE × CALL QUALITY ===\n")
+print(interaction_analysis)
+
+# Customer care calls impact by tenure
+care_calls_impact <- train_data %>%
+  mutate(Tenure_Group = ifelse(MonthsInService <= 12, "New", 
+                               ifelse(MonthsInService <= 36, "Medium", "Long"))) %>%
+  group_by(Tenure_Group, HighCareCalls) %>%
+  summarise(
+    Count = n(),
+    Churn_Rate = sum(Churn == "Yes") / n() * 100,
+    .groups = 'drop'
+  )
+
+cat("\n=== INTERACTION: TENURE × CUSTOMER CARE CALLS ===\n")
+print(care_calls_impact)
+
+# =============================================================================
+# 8. KEY INSIGHTS SUMMARY
+# =============================================================================
+
+cat("\n=== KEY EDA INSIGHTS FOR PATHWAY 2 ===\n")
+
+# Calculate key metrics
+overall_churn_rate <- mean(train_data$Churn == "Yes") * 100
+high_care_churn <- train_data %>% 
+  filter(HighCareCalls == "High") %>% 
+  summarise(Churn_Rate = mean(Churn == "Yes") * 100) %>% pull(Churn_Rate)
+high_issues_churn <- train_data %>% 
+  filter(CallQualityIssues == "High") %>% 
+  summarise(Churn_Rate = mean(Churn == "Yes") * 100) %>% pull(Churn_Rate)
+
+cat(sprintf("Overall churn rate: %.1f%%\n", overall_churn_rate))
+cat(sprintf("Churn rate for high customer care calls: %.1f%%\n", high_care_churn))
+cat(sprintf("Churn rate for high call quality issues: %.1f%%\n", high_issues_churn))
+
+# Final summary
+cat("\n=== INITIAL RECOMMENDATIONS FOR PATHWAY 2 ===\n")
+cat("1. Focus on network reliability improvements\n")
+cat("2. Enhance customer service efficiency\n")  
+cat("3. Monitor high-value customers with service issues\n")
+cat("4. Implement early warning systems for new customers\n")
+cat("5. Develop targeted retention for different customer segments\n")
+
+# Additional visualizations for service factors
+# Plot interaction effects
+p_interaction1 <- ggplot(interaction_analysis, 
+                         aes(x = HighValue, y = Churn_Rate, fill = CallQualityIssues)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Churn Rate: Customer Value × Call Quality",
+       x = "Customer Value", y = "Churn Rate (%)") +
+  theme_minimal()
+
+p_interaction2 <- ggplot(care_calls_impact, 
+                         aes(x = Tenure_Group, y = Churn_Rate, fill = HighCareCalls)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Churn Rate: Tenure × Customer Care Calls",
+       x = "Tenure Group", y = "Churn Rate (%)") +
+  theme_minimal()
+
+grid.arrange(p_interaction1, p_interaction2, ncol = 2)
+```
