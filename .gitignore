@@ -1,0 +1,19 @@
+# --- R session and temporary files ---
+.RData
+.RDataTmp
+.Rhistory
+.Rproj.user/
+.Ruserdata
+*.Rproj
+
+# --- Cache and temp directories ---
+.Rcache/
+.cache/
+__pycache__/
+*.tmp
+*.bak
+
+# --- Personal workspace ---
+.vscode/
+.idea/
+.env
