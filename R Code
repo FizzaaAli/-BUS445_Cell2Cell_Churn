@@ -1,0 +1,77 @@
+# =============================================================================
+#SIMPLE EDA - DATA-DRIVEN FINDINGS
+# =============================================================================
+
+library(tidyverse)
+
+# Load data
+train_data <- read.csv("C:/Users/User/OneDrive - Simon Fraser University (1sfu)/Cell2Cell EDA/cell2celltrain.csv")
+
+cat(" DATA-DRIVEN EDA - 3 SURPRISING FINDINGS\n\n")
+
+# Convert Churn to binary
+train_data$Churn_binary <- ifelse(train_data$Churn == "Yes", 1, 0)
+
+# --- FINDING 1: CREDIT RATING PARADOX ---
+cat("1.  THE CREDIT RATING PARADOX\n")
+
+credit_churn <- train_data %>%
+  group_by(CreditRating) %>%
+  summarise(
+    Customers = n(),
+    Churn_Rate = mean(Churn_binary) * 100
+  ) %>%
+  arrange(Churn_Rate)
+
+print(credit_churn)
+
+# Plot with accurate title
+ggplot(credit_churn, aes(x = reorder(CreditRating, Churn_Rate), y = Churn_Rate)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Finding 1: Better Credit = Higher Churn (Paradox)",
+       x = "Credit Rating", y = "Churn Rate (%)") +
+  theme_minimal()
+
+cat("• Best credit customers churn MORE (30.8% vs 22.1%)\n")
+cat("• INSIGHT: High-credit customers have more options\n\n")
+
+# --- FINDING 2: THE DROPPED CALLS SURPRISE ---
+cat("2.  THE DROPPED CALLS SURPRISE\n")
+
+service_analysis <- train_data %>%
+  mutate(HighDroppedCalls = DroppedCalls > median(DroppedCalls, na.rm = TRUE)) %>%
+  group_by(HighDroppedCalls) %>%
+  summarise(Churn_Rate = mean(Churn_binary, na.rm = TRUE) * 100)
+
+print(service_analysis)
+
+ggplot(service_analysis, aes(x = HighDroppedCalls, y = Churn_Rate)) +
+  geom_col(fill = "coral") +
+  labs(title = "Finding 2: More Dropped Calls = LESS Churn",
+       x = "High Dropped Calls", y = "Churn Rate (%)") +
+  theme_minimal()
+
+cat("• Counter-intuitive: More dropped calls, LESS churn (27.9% vs 29.7%)\n")
+cat("• INSIGHT: Service issues may not be primary churn driver\n\n")
+
+# --- FINDING 3: THE TENURE RISK PATTERN ---
+cat("3.  THE REAL TENURE RISK\n")
+
+tenure_analysis <- train_data %>%
+  mutate(Tenure_Group = cut(MonthsInService, 
+                            breaks = c(0, 6, 12, 24, 100),
+                            labels = c("0-6mo", "7-12mo", "1-2yr", "2+yr"))) %>%
+  group_by(Tenure_Group) %>%
+  summarise(Churn_Rate = mean(Churn_binary, na.rm = TRUE) * 100)
+
+print(tenure_analysis)
+
+ggplot(tenure_analysis, aes(x = Tenure_Group, y = Churn_Rate)) +
+  geom_col(fill = "purple") +
+  labs(title = "Finding 3: Churn Peaks at 1-2 Years, Not Early",
+       x = "Customer Tenure", y = "Churn Rate (%)") +
+  theme_minimal()
+
+cat("• New customers (0-6mo) are SAFEST: 19.3% churn\n")
+cat("• Real risk period: 1-2 years (30.8% churn)\n")
+cat("• INSIGHT: Focus retention efforts on 7-24 month customers\n")
