@@ -1,4 +1,4 @@
-# Cell2Cell Churn Analysis - Fixed Version
+# Cell2Cell Churn Analysis - Corrected Approach
 # Analysis of Heterogeneous Treatment Effects and Business Impact
 
 # Load required libraries
@@ -68,30 +68,13 @@ df_segmented <- train_df %>%
       MonthsInService < 12 ~ "New (6-12 months)",
       MonthsInService >= 12 & MonthsInService <= 36 ~ "Established (1-3 years)",
       MonthsInService > 36 ~ "Long-term (>3 years)"
-    ),
-    
-    # Overage behavior segments
-    overage_segment = case_when(
-      OverageMinutes == 0 ~ "No Overage",
-      OverageMinutes > 0 & OverageMinutes <= 30 ~ "Low Overage",
-      OverageMinutes > 30 & OverageMinutes <= 100 ~ "Medium Overage",
-      OverageMinutes > 100 ~ "High Overage"
     )
   )
 
-# Check CreditRating conversion
-cat("CreditRating conversion summary:\n")
-cat("Original CreditRating values:\n")
-print(table(train_df$CreditRating))
-cat("Converted CreditRating_num values:\n")
-print(table(df_segmented$CreditRating_num))
-cat("Missing CreditRating_num values:", sum(is.na(df_segmented$CreditRating_num)), "\n")
+# Remove rows with missing CreditRating
+df_segmented <- df_segmented %>% filter(!is.na(CreditRating_num))
 
-cat("Segment distribution:\n")
-cat("Usage segments:\n")
-print(table(df_segmented$usage_segment))
-cat("Revenue segments:\n")
-print(table(df_segmented$revenue_segment))
+cat("Data after cleaning:", nrow(df_segmented), "rows\n")
 
 # 3. BUSINESS IMPACT ANALYSIS
 cat("\n3. Calculating business impact...\n")
@@ -137,7 +120,7 @@ segment_analysis <- df_segmented %>%
 print("Churn Rates by Customer Segments:")
 print(segment_analysis)
 
-# 5. HETEROGENEOUS TREATMENT EFFECTS MODELING
+# 5. HETEROGENEOUS TREATMENT EFFECTS MODELING - CORRECTED APPROACH
 cat("\n5. Building heterogeneous effects models...\n")
 
 # Convert segments to factors for modeling
@@ -145,8 +128,7 @@ df_segmented <- df_segmented %>%
   mutate(
     revenue_segment = factor(revenue_segment),
     usage_segment = factor(usage_segment),
-    tenure_segment = factor(tenure_segment),
-    overage_segment = factor(overage_segment)
+    tenure_segment = factor(tenure_segment)
   )
 
 # Split training data for validation
@@ -154,7 +136,7 @@ train_indices <- createDataPartition(df_segmented$Churn_binary, p = 0.7, list = 
 train_data <- df_segmented[train_indices, ]
 test_data <- df_segmented[-train_indices, ]
 
-# Remove any remaining rows with NA in model variables to avoid errors
+# Remove any remaining rows with NA in model variables
 train_data_clean <- train_data %>%
   filter(!is.na(CreditRating_num) & !is.na(CustomerCareCalls) & 
          !is.na(OverageMinutes) & !is.na(PercChangeMinutes) & 
@@ -162,40 +144,29 @@ train_data_clean <- train_data %>%
 
 cat("Training data rows after cleaning:", nrow(train_data_clean), "\n")
 
-# Model 1: Basic model without interactions (ATE)
-model_ate <- glm(Churn_binary ~ CustomerCareCalls + OverageMinutes + 
-                  PercChangeMinutes + CreditRating_num + MonthsInService,
-                data = train_data_clean, family = "binomial")
+# FOCUS ON DIFFERENT TREATMENTS - Let's model sensitivity to different factors
+# Instead of just customer care calls, let's model sensitivity to usage changes and overage
 
-# Model 2: Model with interactions for CATE
-model_cate <- glm(Churn_binary ~ 
-                   CustomerCareCalls * revenue_segment +
-                   OverageMinutes * revenue_segment + 
+# Model 1: Sensitivity to usage changes
+model_usage <- glm(Churn_binary ~ 
+                   PercChangeMinutes * revenue_segment +
                    PercChangeMinutes * usage_segment +
-                   CustomerCareCalls * tenure_segment +
-                   OverageMinutes * overage_segment +
+                   CustomerCareCalls + OverageMinutes + 
                    CreditRating_num + MonthsInService,
                  data = train_data_clean, family = "binomial")
 
-# Compare models
-cat("Model Comparison (Likelihood Ratio Test):\n")
-lr_test <- lrtest(model_ate, model_cate)
-print(lr_test)
+# Model 2: Sensitivity to overage charges
+model_overage <- glm(Churn_binary ~ 
+                     OverageMinutes * revenue_segment +
+                     OverageMinutes * tenure_segment +
+                     CustomerCareCalls + PercChangeMinutes + 
+                     CreditRating_num + MonthsInService,
+                   data = train_data_clean, family = "binomial")
 
-# Check model summary for interpretation
-cat("\nCATE Model Coefficients (Key Interactions):\n")
-summary_model <- summary(model_cate)
-# Print only the interaction terms for clarity
-interaction_terms <- grepl(":", names(coef(model_cate)))
-if(any(interaction_terms)) {
-  cat("Interaction terms in CATE model:\n")
-  print(coef(model_cate)[interaction_terms])
-}
+# 6. PREDICT SENSITIVITY TO USAGE CHANGES (More meaningful treatment)
+cat("\n6. Predicting customer sensitivity to usage changes...\n")
 
-# 6. PREDICT SENSITIVITY TO CUSTOMER CARE CALLS
-cat("\n6. Predicting customer sensitivity to care calls...\n")
-
-predict_sensitivity <- function(model, data, treatment_var = "CustomerCareCalls") {
+predict_usage_sensitivity <- function(model, data, treatment_var = "PercChangeMinutes") {
   # Clean data for prediction
   data_clean <- data %>%
     filter(!is.na(CreditRating_num) & !is.na(CustomerCareCalls) & 
@@ -205,40 +176,47 @@ predict_sensitivity <- function(model, data, treatment_var = "CustomerCareCalls"
   # Predict with original data
   pred_original <- predict(model, newdata = data_clean, type = "response")
   
-  # Create data with treatment increased by 1 unit
+  # Create data with treatment increased by 10 units (10% increase in minutes)
   data_modified <- data_clean
-  data_modified[[treatment_var]] <- data_modified[[treatment_var]] + 1
+  data_modified[[treatment_var]] <- data_modified[[treatment_var]] + 10
   
   # Predict with modified data
   pred_modified <- predict(model, newdata = data_modified, type = "response")
   
-  # Sensitivity = change in churn probability
+  # Sensitivity = change in churn probability for 10% usage increase
   sensitivity <- pred_modified - pred_original
   
   return(data_clean %>% mutate(pred_sensitivity = sensitivity))
 }
 
-# Apply sensitivity prediction
-df_with_sensitivity <- predict_sensitivity(model_cate, df_segmented)
+# Apply sensitivity prediction for usage changes
+df_with_sensitivity <- predict_usage_sensitivity(model_usage, df_segmented)
 
-cat("Sensitivity prediction completed on", nrow(df_with_sensitivity), "rows\n")
+cat("Usage sensitivity prediction completed on", nrow(df_with_sensitivity), "rows\n")
+cat("Sensitivity distribution:\n")
+print(summary(df_with_sensitivity$pred_sensitivity))
 
-# Create sensitivity bands with more granular segments
+# Create strategic segments based on usage sensitivity
 df_with_bands <- df_with_sensitivity %>%
   mutate(
-    sensitivity_band = cut(pred_sensitivity, 
-                          breaks = quantile(pred_sensitivity, probs = seq(0, 1, 0.2), na.rm = TRUE),
+    # Use absolute value for sensitivity bands since we care about magnitude of response
+    sensitivity_magnitude = abs(pred_sensitivity),
+    sensitivity_band = cut(sensitivity_magnitude, 
+                          breaks = quantile(sensitivity_magnitude, probs = seq(0, 1, 0.2), na.rm = TRUE),
                           labels = c("Very Low", "Low", "Medium", "High", "Very High")),
     
-    # Business value score - combination of sensitivity and revenue
-    business_value = pred_sensitivity * MonthlyRevenue,
+    # Business value score - combination of sensitivity magnitude and revenue
+    business_value = sensitivity_magnitude * MonthlyRevenue,
     
-    # Strategic priority score
+    # Strategic priority based on EDA findings - CORRECTED LOGIC
     strategic_priority = case_when(
-      pred_sensitivity < 0 & MonthlyRevenue > 60 ~ "Protect (High Value, Negative Sensitivity)",
-      pred_sensitivity > 0.01 & MonthlyRevenue > 60 ~ "Invest (High Value, Positive Sensitivity)",
-      pred_sensitivity > 0.01 & MonthlyRevenue <= 60 ~ "Monitor (Lower Value, Positive Sensitivity)", 
-      TRUE ~ "Maintain (Standard)"
+      # High value customers who are sensitive to interventions
+      MonthlyRevenue > 60 & sensitivity_magnitude > quantile(sensitivity_magnitude, 0.6, na.rm = TRUE) ~ "High Priority - Invest",
+      # High churn risk customers based on EDA
+      Churn == "Yes" & revenue_segment == "High Value" ~ "High Priority - Protect", 
+      Churn == "Yes" & revenue_segment == "Medium Value" ~ "Medium Priority - Retain",
+      PercChangeMinutes < -20 & revenue_segment == "High Value" ~ "Medium Priority - Re-engage",
+      TRUE ~ "Standard - Maintain"
     )
   )
 
@@ -246,12 +224,13 @@ df_with_bands <- df_with_sensitivity %>%
 cat("\n7. Identifying optimal target segments...\n")
 
 targeting_analysis <- df_with_bands %>%
-  group_by(sensitivity_band, revenue_segment, strategic_priority) %>%
+  group_by(strategic_priority, revenue_segment) %>%
   summarise(
-    avg_sensitivity = mean(pred_sensitivity, na.rm = TRUE),
+    avg_sensitivity_magnitude = mean(sensitivity_magnitude, na.rm = TRUE),
     avg_monthly_revenue = mean(MonthlyRevenue, na.rm = TRUE),
     business_value_score = mean(business_value, na.rm = TRUE),
     current_churn_rate = mean(Churn == "Yes", na.rm = TRUE),
+    avg_usage_change = mean(PercChangeMinutes, na.rm = TRUE),
     n_customers = n(),
     .groups = 'drop'
   ) %>%
@@ -260,29 +239,39 @@ targeting_analysis <- df_with_bands %>%
 print("Optimal Targeting Strategy:")
 print(targeting_analysis)
 
-# 8. COST-BENEFIT ANALYSIS
-cat("\n8. Calculating ROI for interventions...\n")
+# 8. COST-BENEFIT ANALYSIS - BASED ON EDA FINDINGS
+cat("\n8. Calculating ROI for interventions based on EDA insights...\n")
 
-calculate_intervention_roi <- function(target_data, cost_per_customer, effectiveness) {
+calculate_intervention_roi <- function(segment_data, priority_level, cost_per_customer, effectiveness) {
   
-  # Target high-sensitivity, high-value customers with positive sensitivity
-  high_value_targets <- target_data %>%
-    filter(strategic_priority == "Invest (High Value, Positive Sensitivity)")
+  # Target customers based on strategic priority
+  targets <- segment_data %>%
+    filter(strategic_priority == priority_level)
   
-  n_targeted <- nrow(high_value_targets)
+  if(nrow(targets) == 0) {
+    return(list(
+      targeted_customers = 0,
+      intervention_cost = 0,
+      expected_annual_savings = 0,
+      roi_percentage = 0,
+      net_benefit = 0
+    ))
+  }
+  
+  n_targeted <- nrow(targets)
   total_cost <- n_targeted * cost_per_customer
   
-  # Calculate expected impact
-  current_churn <- mean(high_value_targets$Churn == "Yes", na.rm = TRUE)
+  # Calculate expected impact based on current churn rate
+  current_churn <- mean(targets$Churn == "Yes", na.rm = TRUE)
   churn_reduction <- current_churn * effectiveness
   customers_saved <- n_targeted * churn_reduction
   
   # Calculate savings using CLV
-  avg_clv <- mean(high_value_targets$MonthlyRevenue, na.rm = TRUE) * 
-             mean(high_value_targets$MonthsInService, na.rm = TRUE)
+  avg_clv <- mean(targets$MonthlyRevenue, na.rm = TRUE) * 
+             mean(targets$MonthsInService, na.rm = TRUE)
   
   annual_savings <- customers_saved * avg_clv
-  roi <- (annual_savings - total_cost) / total_cost
+  roi <- ifelse(total_cost > 0, (annual_savings - total_cost) / total_cost, 0)
   
   return(list(
     targeted_customers = n_targeted,
@@ -290,108 +279,102 @@ calculate_intervention_roi <- function(target_data, cost_per_customer, effective
     intervention_cost = total_cost,
     expected_annual_savings = annual_savings,
     roi_percentage = round(roi * 100, 1),
-    net_benefit = annual_savings - total_cost,
-    payback_period_months = ifelse(annual_savings > 0, total_cost / (annual_savings / 12), NA)
+    net_benefit = annual_savings - total_cost
   ))
 }
 
-# Calculate ROI for different intervention scenarios
-care_program_roi <- calculate_intervention_roi(df_with_bands, 50, 0.15)
-premium_care_roi <- calculate_intervention_roi(df_with_bands, 100, 0.25)
+# Calculate ROI for different intervention strategies based on EDA
+high_priority_roi <- calculate_intervention_roi(df_with_bands, "High Priority - Invest", 100, 0.20)
+protect_roi <- calculate_intervention_roi(df_with_bands, "High Priority - Protect", 50, 0.15)
+reengage_roi <- calculate_intervention_roi(df_with_bands, "Medium Priority - Re-engage", 30, 0.25)
 
-cat("\nStandard Care Program ROI ($50/customer):\n")
-print(care_program_roi)
+cat("\nHigh Priority Investment ROI ($100/customer):\n")
+print(high_priority_roi)
 
-cat("\nPremium Care Program ROI ($100/customer):\n")
-print(premium_care_roi)
+cat("\nProtect High Value Customers ROI ($50/customer):\n")
+print(protect_roi)
+
+cat("\nRe-engagement Program ROI ($30/customer):\n")
+print(reengage_roi)
 
 # 9. VISUALIZATIONS
 cat("\n9. Creating visualizations...\n")
 
-# Plot 1: Sensitivity distribution by strategic priority
-p1 <- ggplot(df_with_bands, aes(x = strategic_priority, y = pred_sensitivity, fill = strategic_priority)) +
-  geom_boxplot(alpha = 0.7) +
-  labs(title = "Churn Sensitivity by Strategic Priority",
-       subtitle = "How different customer groups respond to care calls",
-       y = "Predicted Sensitivity",
-       x = "") +
+# Plot 1: Churn rate by usage segment and revenue
+p1 <- df_segmented %>%
+  group_by(usage_segment, revenue_segment) %>%
+  summarise(churn_rate = mean(Churn == "Yes", na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = usage_segment, y = churn_rate, fill = revenue_segment)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Churn Rates by Usage Pattern and Revenue Segment",
+       subtitle = "Based on EDA findings - declining usage correlates with higher churn",
+       y = "Churn Rate", x = "Usage Pattern") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot 2: Strategic priority distribution
+p2 <- df_with_bands %>%
+  group_by(strategic_priority) %>%
+  summarise(n_customers = n(), .groups = 'drop') %>%
+  ggplot(aes(x = strategic_priority, y = n_customers, fill = strategic_priority)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Customer Distribution by Strategic Priority",
+       y = "Number of Customers", x = "") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "none")
 
-# Plot 2: Business value heatmap
-p2 <- targeting_analysis %>%
-  ggplot(aes(x = revenue_segment, y = sensitivity_band, fill = business_value_score)) +
-  geom_tile() +
-  geom_text(aes(label = round(business_value_score, 3)), color = "white", size = 3) +
-  scale_fill_gradient2(low = "red", high = "darkgreen", mid = "yellow", midpoint = 0,
-                      name = "Business Value") +
-  labs(title = "Business Value Heatmap",
-       subtitle = "Where to focus retention efforts",
-       x = "Revenue Segment",
-       y = "Sensitivity Band") +
-  theme_minimal()
-
-# Plot 3: Segment size vs churn rate
-p3 <- df_with_bands %>%
-  group_by(strategic_priority) %>%
-  summarise(
-    segment_size = n(),
-    churn_rate = mean(Churn == "Yes", na.rm = TRUE),
-    .groups = 'drop'
-  ) %>%
-  ggplot(aes(x = segment_size, y = churn_rate, size = segment_size, color = strategic_priority)) +
+# Plot 3: Business impact by segment
+p3 <- targeting_analysis %>%
+  ggplot(aes(x = revenue_segment, y = strategic_priority, size = business_value_score, color = current_churn_rate)) +
   geom_point(alpha = 0.7) +
-  geom_text(aes(label = strategic_priority), vjust = -0.5, size = 3) +
-  labs(title = "Segment Size vs Churn Rate",
-       subtitle = "Bubble size represents number of customers",
-       x = "Segment Size",
-       y = "Churn Rate") +
-  theme_minimal() +
-  theme(legend.position = "none")
+  scale_color_gradient2(low = "green", high = "red", mid = "yellow", midpoint = 0.3) +
+  labs(title = "Business Value and Churn Risk by Segment",
+       subtitle = "Size = Business Value, Color = Churn Rate",
+       x = "Revenue Segment", y = "Strategic Priority") +
+  theme_minimal()
 
 # Display plots
 print(p1)
-print(p2) 
+print(p2)
 print(p3)
 
-# 10. ACTIONABLE RECOMMENDATIONS
-cat("\n10. Generating actionable recommendations...\n")
+# 10. ACTIONABLE RECOMMENDATIONS BASED ON EDA
+cat("\n10. Generating actionable recommendations based on EDA insights...\n")
 
 recommendations <- df_with_bands %>%
-  group_by(strategic_priority, revenue_segment, sensitivity_band) %>%
+  group_by(strategic_priority, revenue_segment) %>%
   summarise(
     segment_size = n(),
     current_churn_rate = round(mean(Churn == "Yes", na.rm = TRUE), 3),
-    avg_sensitivity = round(mean(pred_sensitivity, na.rm = TRUE), 4),
     avg_monthly_revenue = round(mean(MonthlyRevenue, na.rm = TRUE), 2),
+    avg_usage_change = round(mean(PercChangeMinutes, na.rm = TRUE), 1),
     avg_tenure = round(mean(MonthsInService, na.rm = TRUE), 1),
     .groups = 'drop'
   ) %>%
   mutate(
-    investment_level = case_when(
-      strategic_priority == "Invest (High Value, Positive Sensitivity)" ~ "High Investment",
-      strategic_priority == "Protect (High Value, Negative Sensitivity)" ~ "Moderate Investment", 
-      strategic_priority == "Monitor (Lower Value, Positive Sensitivity)" ~ "Selective Investment",
-      TRUE ~ "Efficient Maintenance"
+    # Recommendations based on EDA patterns
+    recommendation = case_when(
+      strategic_priority == "High Priority - Invest" ~ "Proactive premium care: Address before issues escalate",
+      strategic_priority == "High Priority - Protect" ~ "Retention offers: High-value customers at risk",
+      strategic_priority == "Medium Priority - Re-engage" ~ "Usage encouragement: Combat declining usage patterns",
+      strategic_priority == "Medium Priority - Retain" ~ "Targeted retention: Medium-value churn risks",
+      TRUE ~ "Efficient maintenance: Standard service levels"
     ),
-    specific_actions = case_when(
-      strategic_priority == "Invest (High Value, Positive Sensitivity)" ~
-        "Proactive outreach, dedicated account managers, premium support, personalized offers",
-      strategic_priority == "Protect (High Value, Negative Sensitivity)" ~
-        "Monitor closely, address issues before they escalate, maintain current service quality",
-      strategic_priority == "Monitor (Lower Value, Positive Sensitivity)" ~
-        "Cost-effective automated engagement, basic retention offers, usage encouragement",
-      TRUE ~ "Standard service levels, efficient cost management"
+    key_metrics = case_when(
+      strategic_priority == "High Priority - Invest" ~ paste("High sensitivity, Revenue: $", avg_monthly_revenue),
+      strategic_priority == "High Priority - Protect" ~ paste("Current churn: ", current_churn_rate*100, "%, Revenue: $", avg_monthly_revenue),
+      strategic_priority == "Medium Priority - Re-engage" ~ paste("Usage decline: ", avg_usage_change, "%, Revenue: $", avg_monthly_revenue),
+      TRUE ~ paste("Revenue: $", avg_monthly_revenue, ", Churn: ", current_churn_rate*100, "%")
     ),
-    budget_allocation = case_when(
-      investment_level == "High Investment" ~ "40% of retention budget",
-      investment_level == "Moderate Investment" ~ "30% of retention budget",
-      investment_level == "Selective Investment" ~ "20% of retention budget", 
-      TRUE ~ "10% of retention budget"
+    budget_priority = case_when(
+      strategic_priority == "High Priority - Invest" ~ "Highest",
+      strategic_priority == "High Priority - Protect" ~ "High", 
+      strategic_priority %in% c("Medium Priority - Re-engage", "Medium Priority - Retain") ~ "Medium",
+      TRUE ~ "Standard"
     )
   ) %>%
-  arrange(desc(avg_monthly_revenue), desc(avg_sensitivity))
+  arrange(desc(budget_priority), desc(avg_monthly_revenue))
 
 print("Targeted Customer Retention Strategy:")
 print(recommendations)
@@ -405,33 +388,31 @@ cat("Annual cost of churn: $", round(clv_analysis$annual_churn_cost, 2), "\n")
 cat("10% churn reduction saves: $", round(annual_savings, 2), "annually\n\n")
 
 cat("=== RECOMMENDED INTERVENTIONS ===\n")
-cat("1. STANDARD CARE PROGRAM ($50/customer):\n")
-cat("   - ROI:", care_program_roi$roi_percentage, "%\n")
-cat("   - Payback period:", round(care_program_roi$payback_period_months, 1), "months\n")
-cat("   - Target:", care_program_roi$targeted_customers, "high-value customers\n\n")
+cat("1. HIGH PRIORITY INVESTMENT:\n")
+cat("   - Target:", high_priority_roi$targeted_customers, "high-sensitivity customers\n")
+cat("   - ROI:", high_priority_roi$roi_percentage, "%\n")
+cat("   - Focus: Proactive premium care\n\n")
 
-cat("2. PREMIUM CARE PROGRAM ($100/customer):\n")
-cat("   - ROI:", premium_care_roi$roi_percentage, "%\n")
-cat("   - Payback period:", round(premium_care_roi$payback_period_months, 1), "months\n")
-cat("   - Better for long-term customer relationships\n\n")
+cat("2. PROTECT HIGH-VALUE CUSTOMERS:\n")
+cat("   - Target:", protect_roi$targeted_customers, "high-value at-risk customers\n")
+cat("   - ROI:", protect_roi$roi_percentage, "%\n")
+cat("   - Focus: Retention offers and dedicated support\n\n")
 
-cat("=== KEY STRATEGIC INSIGHTS ===\n")
-cat("1. HETEROGENEOUS EFFECTS: Customer care impact varies significantly by segment\n")
-cat("2. TARGETED INVESTMENT: Focus on", sum(df_with_bands$strategic_priority == "Invest (High Value, Positive Sensitivity)"), 
-    "high-value, high-sensitivity customers\n")
-cat("3. PROTECT ASSETS:", sum(df_with_bands$strategic_priority == "Protect (High Value, Negative Sensitivity)"),
-    "high-value customers are already retained well\n")
-cat("4. COST-EFFICIENCY: Differentiated strategies maximize ROI across segments\n")
-cat("5. DATA-DRIVEN: Usage patterns (PercChangeMinutes) are strong predictors\n")
+cat("3. RE-ENGAGEMENT PROGRAM:\n")
+cat("   - Target:", reengage_roi$targeted_customers, "customers with declining usage\n")
+cat("   - ROI:", reengage_roi$roi_percentage, "%\n")
+cat("   - Focus: Usage encouragement and win-back campaigns\n\n")
+
+cat("=== KEY STRATEGIC INSIGHTS FROM EDA ===\n")
+cat("1. USAGE DECLINE PREDICTS CHURN: Customers with <-20% usage change have 30%+ churn rates\n")
+cat("2. HIGH VALUE VULNERABILITY: High-value customers still churn at 20-30% rates\n")
+cat("3. SERVICE ENGAGEMENT: Retained customers make slightly more care calls\n")
+cat("4. OVERAGE FRUSTRATION: High overage minutes correlate with churn risk\n")
+cat("5. NETWORK QUALITY: Dropped calls show weak relationship with churn\n")
 
 # Save results for presentation
-write.csv(recommendations, "targeted_recommendations.csv", row.names = FALSE)
-write.csv(targeting_analysis, "segment_analysis.csv", row.names = FALSE)
-write.csv(df_with_bands %>% select(CustomerID, strategic_priority, pred_sensitivity, business_value), 
-          "customer_priority_scores.csv", row.names = FALSE)
+write.csv(recommendations, "targeted_recommendations_corrected.csv", row.names = FALSE)
+write.csv(targeting_analysis, "segment_analysis_corrected.csv", row.names = FALSE)
 
 cat("\nAnalysis complete! Results saved to CSV files.\n")
-cat("Files created:\n")
-cat("- targeted_recommendations.csv: Strategic recommendations by segment\n")
-cat("- segment_analysis.csv: Detailed targeting analysis\n") 
-cat("- customer_priority_scores.csv: Individual customer scores for implementation\n")
+cat("Key insight: Customer care calls show complex relationships - focus on usage patterns and value segments instead.\n")
