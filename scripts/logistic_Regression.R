@@ -12,7 +12,7 @@ library(tidyverse)
 library(car)
 library(pROC)
 library(broom)
-
+library(caret)
 
 
 # --- 1. Load cleaned training data ---------------------------
@@ -38,16 +38,18 @@ identical(names(train), names(holdout))
 # --- 3) Build logistic model on the train --------------------
 
 logit_base <- glm(
-  Churn_flag ~ DroppedBlockedCalls +
-    CustomerCareCalls +
+  Churn_flag ~ CustomerCareCalls +
+    DroppedBlockedCalls +
+    MonthlyRevenue +
+    MonthlyMinutes +
     OverageMinutes +
     PercChangeMinutes +
     PercChangeRevenues +
-    MonthsInService +
-    CreditRating_num,
-  data = service_vars,
+    MonthsInService,
+  data = train,
   family = binomial
 )
+
 
 summary(logit_base)
 
@@ -84,10 +86,13 @@ confusionMatrix(
 
 # --- 6. Interpretability – Odds Ratios ------------------------
 coef_tab <- tidy(logit_base, conf.int = TRUE, exponentiate = TRUE) %>%
-  rename(OR = estimate, CI_low = conf.low, CI_high = conf.high)
+  rename(OR = estimate, CI_low = conf.low, CI_high = conf.high, p_value = p.value)
 
 coef_tab
 
+coef_tab %>%
+  arrange(desc(abs(log(OR)))) %>%
+  print(n = Inf)
 
 
 # --- 7. Predict on holdout (no true churn labels) -------------
@@ -99,6 +104,13 @@ holdout$pred_class <- ifelse(holdout$pred_prob > 0.5, 1, 0)
 # Save predictions for future evaluation
 write.csv(holdout[, c("pred_prob", "pred_class")],
           "data/holdout_predictions.csv", row.names = FALSE)
+
+
+
+
+
+
+
 
 
 
