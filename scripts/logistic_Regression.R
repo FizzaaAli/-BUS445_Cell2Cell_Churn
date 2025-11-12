@@ -108,8 +108,114 @@ write.csv(holdout[, c("pred_prob", "pred_class")],
 
 
 
+# --- SEGMENT MODEL: Heterogeneity by Credit Rating -------------
+
+# Make sure interaction variable exists
+train <- train %>%
+  mutate(Care_Credit_Interaction = CustomerCareCalls * CreditRating_num)
+
+# Fit logistic regression with interaction
+logit_segment <- glm(
+  Churn_flag ~ CustomerCareCalls + DroppedBlockedCalls + OverageMinutes +
+    PercChangeMinutes + PercChangeRevenues + MonthsInService +
+    CreditRating_num + Care_Credit_Interaction,
+  data = train,
+  family = binomial
+)
+
+summary(logit_segment)
+
+# Get odds ratios and 95% CIs
+library(broom)
+coef_seg <- tidy(logit_segment, conf.int = TRUE, exponentiate = TRUE) %>%
+  rename(OR = estimate, CI_low = conf.low, CI_high = conf.high, p_value = p.value) %>%
+  arrange(desc(abs(log(OR))))
+
+coef_seg
+
+# --- EXTENDED INTERACTION MODEL ------------------------------
+library(broom)
+
+train <- train %>%
+  mutate(
+    Care_Credit_Interaction = CustomerCareCalls * CreditRating_num,
+    Quality_Credit_Interaction = DroppedBlockedCalls * CreditRating_num,
+    Care_Tenure_Interaction = CustomerCareCalls * MonthsInService
+  )
+
+logit_multi <- glm(
+  Churn_flag ~ CustomerCareCalls + DroppedBlockedCalls + OverageMinutes +
+    PercChangeMinutes + PercChangeRevenues + MonthsInService + CreditRating_num +
+    Care_Credit_Interaction + Quality_Credit_Interaction + Care_Tenure_Interaction,
+  data = train,
+  family = binomial
+)
+
+summary(logit_multi)
+
+coef_multi <- tidy(logit_multi, conf.int = TRUE, exponentiate = TRUE) %>%
+  rename(OR = estimate, CI_low = conf.low, CI_high = conf.high, p_value = p.value) %>%
+  arrange(desc(abs(log(OR))))
+
+coef_multi
 
 
+library(sjPlot)
+plot_model(logit_multi, type = "int", terms = c("CustomerCareCalls", "CreditRating_num"))
+plot_model(logit_multi, type = "int", terms = c("CustomerCareCalls", "MonthsInService"))
+
+
+
+
+# --- PREDICTED CHURN PROBABILITIES ---------------------------
+
+# Make sure model and data are loaded
+# Model: logit_multi  (from earlier)
+# Data: train
+
+# Create scenario dataset (like Python version)
+scenario_df <- expand.grid(
+  CustomerCareCalls = c(0, 2, 5),             # none, moderate, high engagement
+  DroppedBlockedCalls = median(train$DroppedBlockedCalls, na.rm = TRUE),
+  OverageMinutes = median(train$OverageMinutes, na.rm = TRUE),
+  PercChangeMinutes = median(train$PercChangeMinutes, na.rm = TRUE),
+  PercChangeRevenues = median(train$PercChangeRevenues, na.rm = TRUE),
+  MonthsInService = c(3, 12, 36),             # new, mid, long-term
+  CreditRating_num = c(2, 5, 7)               # good, medium, poor credit
+)
+
+# Add interaction terms
+scenario_df <- scenario_df %>%
+  mutate(
+    Care_Credit_Interaction = CustomerCareCalls * CreditRating_num,
+    Quality_Credit_Interaction = DroppedBlockedCalls * CreditRating_num,
+    Care_Tenure_Interaction = CustomerCareCalls * MonthsInService
+  )
+
+# Predict churn probabilities
+scenario_df$Predicted_Churn_Prob <- predict(logit_multi, newdata = scenario_df, type = "response")
+
+# Round and print results in pivot style
+library(tidyr)
+pivot_result <- scenario_df %>%
+  select(CreditRating_num, MonthsInService, CustomerCareCalls, Predicted_Churn_Prob) %>%
+  pivot_wider(names_from = CustomerCareCalls, values_from = Predicted_Churn_Prob)
+
+print(pivot_result, n = 20)
+
+
+ggplot(scenario_df, aes(x = CustomerCareCalls, y = Predicted_Churn_Prob,
+                        color = factor(CreditRating_num), group = CreditRating_num)) +
+  geom_line(size = 1.1) +
+  geom_point(size = 2) +
+  facet_wrap(~MonthsInService) +
+  scale_color_manual(values = c("darkgreen", "orange", "red"),
+                     name = "Credit Rating\n(1=Best, 7=Worst)") +
+  theme_minimal() +
+  labs(title = "Predicted Churn Probability by Customer Care and Credit Rating",
+       subtitle = "Faceted by Tenure",
+       x = "Number of Customer Care Calls",
+       y = "Predicted Probability of Churn")
 
 
 
