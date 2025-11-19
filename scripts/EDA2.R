@@ -1,8 +1,6 @@
 ###############################################################
 # Cell2Cell Churn Challenge — Business-Focused EDA
 # Objective: Identify patterns and potential churn drivers
-# Author: [Your Name]
-# Date: [Today’s Date]
 ###############################################################
 
 # --- 0. SETUP ------------------------------------------------

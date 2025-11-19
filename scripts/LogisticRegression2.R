@@ -1,8 +1,6 @@
 ###############################################################
 # Cell2Cell Churn Challenge — Logistic Regression Modeling
 # Objective: Identify key churn drivers and quantify their impact
-# Author: [Your Name]
-# Date: [Today’s Date]
 ###############################################################
 
 # --- 0. SETUP ------------------------------------------------
@@ -156,4 +154,5 @@ ggplot(cutoff_results, aes(x = Cutoff)) +
        y = "Metric Value", x = "Cutoff Probability",
        color = "Metric") +
   theme_minimal()
+
 
