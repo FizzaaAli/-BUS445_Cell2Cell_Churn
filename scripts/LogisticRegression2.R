@@ -1,6 +1,8 @@
 ###############################################################
 # Cell2Cell Churn Challenge — Logistic Regression Modeling
 # Objective: Identify key churn drivers and quantify their impact
+# Author: [Your Name]
+# Date: [Today’s Date]
 ###############################################################
 
 # --- 0. SETUP ------------------------------------------------
@@ -9,6 +11,10 @@ library(car)
 library(broom)
 library(pROC)
 library(caret)
+library(ggplot2)
+library(dplyr)
+library(scales)
+
 
 # --- 1. LOAD CLEAN DATA -------------------------------------
 data <- read.csv("data/clean_service_vars_new.csv")
@@ -155,4 +161,77 @@ ggplot(cutoff_results, aes(x = Cutoff)) +
        color = "Metric") +
   theme_minimal()
 
+
+###############################################################
+# --- 11. SEGMENTATION ----------------------------------------
+###############################################################
+
+# Add predictions to original data
+data$pred_prob <- predict(model_interact, newdata = data, type = "response")
+data$pred_class <- ifelse(data$pred_prob >= 0.30, "Churned", "Stayed")
+
+# Create churn-risk segments
+data$RiskSegment <- case_when(
+  data$pred_prob >= 0.30 ~ "High",
+  data$pred_prob >= 0.20 ~ "Medium",
+  TRUE ~ "Low"
+)
+
+data$RiskSegment <- factor(data$RiskSegment, levels = c("Low","Medium","High"))
+
+table(data$RiskSegment)
+prop.table(table(data$RiskSegment))
+
+
+###############################################################
+# --- 12. Segment-Level Summary Stats -------------------------
+###############################################################
+
+segment_summary <- data %>%
+  mutate(ChurnBinary = ifelse(Churn_flag == "Churned", 1, 0)) %>%
+  group_by(RiskSegment) %>%
+  summarise(
+    Count = n(),
+    Avg_Revenue = mean(MonthlyRevenue, na.rm = TRUE),
+    Avg_Tenure = mean(MonthsInService, na.rm = TRUE),
+    Avg_ChurnProb = mean(pred_prob, na.rm = TRUE),
+    Actual_ChurnRate = mean(ChurnBinary, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(segment_summary)
+
+
+###############################################################
+# --- 13. Plot: Predicted Churn Probability by Segment --------
+###############################################################
+
+ggplot(segment_summary, aes(x = RiskSegment, y = Avg_ChurnProb, fill = RiskSegment)) +
+  geom_col() +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c("Low" = "#6CC24A",
+                               "Medium" = "#1E90FF",
+                               "High" = "#FF6B6B")) +
+  labs(
+    title = "Predicted Churn Probability by Segment",
+    x = "Risk Segment",
+    y = "Predicted Churn Probability"
+  ) +
+  theme_minimal(base_size = 16)
+
+###############################################################
+# --- 14. Plot: Average Revenue by Segment --------------------
+###############################################################
+
+ggplot(segment_summary, aes(x = RiskSegment, y = Avg_Revenue, fill = RiskSegment)) +
+  geom_col() +
+  scale_fill_manual(values = c("Low" = "#6CC24A",
+                               "Medium" = "#1E90FF",
+                               "High" = "#FF6B6B")) +
+  labs(
+    title = "Average Monthly Revenue by Segment",
+    x = "Risk Segment",
+    y = "Revenue ($)"
+  ) +
+  theme_minimal(base_size = 16)
 
