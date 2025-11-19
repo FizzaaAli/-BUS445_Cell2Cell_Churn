@@ -3,6 +3,13 @@
 # Goal: Translate churn probabilities into actionable customer risk groups
 ###############################################################
 
+library(dplyr)   # defines %>% and case_when
+library(tidyverse)
+library(car)
+library(broom)
+library(pROC)
+library(caret)
+
 # Add risk segments based on predicted probabilities
 model_data <- model_data %>%
   mutate(
